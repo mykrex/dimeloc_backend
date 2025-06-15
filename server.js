@@ -733,43 +733,163 @@ app.post('/api/tiendas/:id/analyze', async (req, res) => {
   }
 });
 
-// LOGIN SIMPLE
+// ===============================
+// 🔐 AUTENTICACIÓN CON JWT
+// ===============================
+
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'dimeloc_fallback_secret_key';
+const JWT_EXPIRES_IN = '7d';
+
+// Middleware para verificar token
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Token de acceso requerido'
+    });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({
+        success: false,
+        message: 'Token inválido'
+      });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// POST /api/auth/login - LOGIN CON JWT
 app.post('/api/auth/login', async (req, res) => {
   try {
+    console.log('🔐 Intento de login:', req.body.email);
+    
     const { email, password } = req.body;
     
-    if (!email.endsWith('@arcacontinental.mx')) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email debe ser de @arcacontinental.mx' 
+    // Validar campos requeridos
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email y contraseña son requeridos'
       });
     }
-    
-    const usuario = await db.collection('usuarios').findOne({ 
-      email: email.toLowerCase(), 
-      password,
-      activo: true 
+
+    // Buscar usuario por email (case insensitive)
+    const usuario = await db.collection('usuarios').findOne({
+      email: email.toLowerCase().trim()
     });
-    
-    if (usuario) {
-      res.json({ 
-        success: true, 
-        user: {
-          id: usuario._id.toString(),
-          nombre: usuario.nombre,
-          email: usuario.email,
-          rol: usuario.rol,
-          telefono: usuario.telefono
-        }
-      });
-    } else {
-      res.status(401).json({ 
-        success: false, 
-        error: 'Credenciales incorrectas' 
+
+    if (!usuario) {
+      console.log('❌ Usuario no encontrado:', email);
+      return res.status(401).json({
+        success: false,
+        message: 'Correo o contraseña incorrectos'
       });
     }
+
+    // Verificar si el usuario está activo
+    if (!usuario.activo) {
+      console.log('❌ Usuario inactivo:', email);
+      return res.status(403).json({
+        success: false,
+        message: 'Usuario inactivo. Contacta al administrador'
+      });
+    }
+
+    // Verificar contraseña (texto plano por ahora)
+    const isValidPassword = password === usuario.password;
+
+    if (!isValidPassword) {
+      console.log('❌ Contraseña incorrecta para:', email);
+      return res.status(401).json({
+        success: false,
+        message: 'Correo o contraseña incorrectos'
+      });
+    }
+
+    // Crear token JWT
+    const tokenPayload = {
+      userId: usuario._id.toString(),
+      email: usuario.email,
+      rol: usuario.rol
+    };
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+    // Preparar datos del usuario (sin contraseña)
+    const userData = {
+      _id: usuario._id.toString(),
+      nombre: usuario.nombre,
+      email: usuario.email,
+      rol: usuario.rol,
+      telefono: usuario.telefono,
+      activo: usuario.activo,
+      fecha_registro: usuario.fecha_registro
+    };
+
+    console.log('✅ Login exitoso:', usuario.nombre);
+
+    res.json({
+      success: true,
+      message: 'Login exitoso',
+      data: userData,
+      token: token
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('❌ Error en login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+// GET /api/auth/validate - Validar token
+app.get('/api/auth/validate', authenticateToken, async (req, res) => {
+  try {
+    const { ObjectId } = require('mongodb');
+    
+    // Buscar usuario por ID del token
+    const usuario = await db.collection('usuarios').findOne({
+      _id: new ObjectId(req.user.userId)
+    });
+
+    if (!usuario || !usuario.activo) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no válido'
+      });
+    }
+
+    // Preparar datos del usuario (sin contraseña)
+    const userData = {
+      _id: usuario._id.toString(),
+      nombre: usuario.nombre,
+      email: usuario.email,
+      rol: usuario.rol,
+      telefono: usuario.telefono,
+      activo: usuario.activo,
+      fecha_registro: usuario.fecha_registro
+    };
+
+    res.json({
+      success: true,
+      data: userData
+    });
+
+  } catch (error) {
+    console.error('❌ Error validating token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
   }
 });
 
