@@ -1,4 +1,6 @@
 // server.js - API para datos GeoJSON de tiendas OXXO
+const { GeminiService } = require('./services/geminiService');
+
 const express = require('express');
 const { MongoClient } = require('mongodb');
 const cors = require('cors');
@@ -366,6 +368,298 @@ app.post('/api/insights/analyze-all', async (req, res) => {
     res.json({ success: true, urgent_stores: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// TEST GEMINI
+app.post('/api/test-gemini', async (req, res) => {
+  try {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'GEMINI_API_KEY no configurada'
+      });
+    }
+    
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+    const prompt = "Analiza este feedback de tienda: 'El refrigerador no funciona desde hace 2 semanas y los productos lácteos están dañándose'";
+    
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    
+    res.json({
+      success: true,
+      prompt: prompt,
+      analysis: response.text()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 1. ENDPOINT: Agregar feedback
+app.post('/api/tiendas/:id/feedback', async (req, res) => {
+  try {
+    const { colaborador, comentario, categoria, urgencia } = req.body;
+    const tiendaId = parseInt(req.params.id);
+    
+    // Validaciones básicas
+    if (!colaborador || !comentario || !categoria || !urgencia) {
+      return res.status(400).json({
+        success: false,
+        error: 'Faltan campos requeridos: colaborador, comentario, categoria, urgencia'
+      });
+    }
+    
+    // Crear documento de feedback
+    const feedback = {
+      tienda_id: tiendaId,
+      colaborador: colaborador.trim(),
+      fecha: new Date().toISOString(),
+      comentario: comentario.trim(),
+      categoria,
+      urgencia,
+      resuelto: false
+    };
+    
+    // Guardar feedback en MongoDB
+    const result = await db.collection('feedback_tiendas').insertOne(feedback);
+    console.log(`✅ Feedback guardado con ID: ${result.insertedId}`);
+    
+    // Obtener feedback reciente de esta tienda para análisis
+    const recentFeedback = await db.collection('feedback_tiendas')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha: -1 })
+      .limit(10)
+      .toArray();
+    
+    console.log(`📊 Analizando ${recentFeedback.length} comentarios para tienda ${tiendaId}`);
+    
+    // Analizar con Gemini si hay suficiente feedback
+    let geminiAnalysis = null;
+    if (recentFeedback.length >= 1) { // Analizar desde el primer comentario
+      try {
+        const geminiService = new GeminiService();
+        
+        // Obtener nombre de la tienda
+        const tiendas = await obtenerTiendasDesdeGeoJSON();
+        const tienda = tiendas.find(t => t._id === tiendaId);
+        const tiendaNombre = tienda ? tienda.nombre : `Tienda ${tiendaId}`;
+        
+        geminiAnalysis = await geminiService.analyzeStoreFeedback(
+          tiendaNombre, 
+          recentFeedback
+        );
+        
+        // Guardar insights en MongoDB
+        if (geminiAnalysis) {
+          const insightDoc = {
+            tienda_id: tiendaId,
+            fecha_analisis: new Date().toISOString(),
+            alertas: geminiAnalysis.alerts,
+            insights: geminiAnalysis.insights,
+            recomendaciones: geminiAnalysis.recommendations,
+            prioridad: geminiAnalysis.priority,
+            resumen: geminiAnalysis.summary,
+            feedback_analizado: recentFeedback.map(f => f._id),
+            total_comentarios: recentFeedback.length
+          };
+          
+          const insightResult = await db.collection('insights_gemini').insertOne(insightDoc);
+          console.log(`🤖 Insight generado con ID: ${insightResult.insertedId}`);
+        }
+      } catch (error) {
+        console.error('❌ Error con Gemini:', error.message);
+        // Continuar aunque falle Gemini
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Feedback enviado correctamente',
+      feedback: {
+        id: result.insertedId,
+        tienda_id: tiendaId,
+        fecha: feedback.fecha
+      },
+      analysis: geminiAnalysis ? {
+        generated: true,
+        priority: geminiAnalysis.priority,
+        summary: geminiAnalysis.summary
+      } : {
+        generated: false,
+        reason: 'Insuficiente feedback para análisis'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error guardando feedback:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 2. ENDPOINT: Obtener feedback de una tienda
+app.get('/api/tiendas/:id/feedback', async (req, res) => {
+  try {
+    const tiendaId = parseInt(req.params.id);
+    
+    const feedback = await db.collection('feedback_tiendas')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha: -1 })
+      .toArray();
+    
+    res.json({
+      success: true,
+      count: feedback.length,
+      data: feedback
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo feedback:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 3. ENDPOINT: Obtener insights de Gemini para una tienda
+app.get('/api/tiendas/:id/insights', async (req, res) => {
+  try {
+    const tiendaId = parseInt(req.params.id);
+    
+    const insights = await db.collection('insights_gemini')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha_analisis: -1 })
+      .limit(5)
+      .toArray();
+    
+    res.json({
+      success: true,
+      count: insights.length,
+      data: insights
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo insights:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 4. ENDPOINT: Obtener resumen de todas las tiendas problemáticas
+app.get('/api/insights/problematicas', async (req, res) => {
+  try {
+    // Obtener insights de prioridad alta de los últimos 7 días
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const problematicInsights = await db.collection('insights_gemini')
+      .find({
+        prioridad: 'alta',
+        fecha_analisis: { $gte: sevenDaysAgo.toISOString() }
+      })
+      .sort({ fecha_analisis: -1 })
+      .toArray();
+    
+    // Obtener información de las tiendas
+    const tiendas = await obtenerTiendasDesdeGeoJSON();
+    
+    const result = problematicInsights.map(insight => {
+      const tienda = tiendas.find(t => t._id === insight.tienda_id);
+      return {
+        tienda_id: insight.tienda_id,
+        tienda_nombre: tienda ? tienda.nombre : `Tienda ${insight.tienda_id}`,
+        alertas: insight.alertas,
+        resumen: insight.resumen,
+        fecha_analisis: insight.fecha_analisis,
+        total_comentarios: insight.total_comentarios
+      };
+    });
+    
+    res.json({
+      success: true,
+      count: result.length,
+      data: result,
+      message: `${result.length} tiendas con alertas de prioridad alta en los últimos 7 días`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo tiendas problemáticas:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 5. ENDPOINT: Analizar tienda específica manualmente
+app.post('/api/tiendas/:id/analyze', async (req, res) => {
+  try {
+    const tiendaId = parseInt(req.params.id);
+    
+    // Obtener feedback reciente
+    const recentFeedback = await db.collection('feedback_tiendas')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha: -1 })
+      .limit(15)
+      .toArray();
+    
+    if (recentFeedback.length === 0) {
+      return res.json({
+        success: false,
+        message: 'No hay feedback disponible para analizar'
+      });
+    }
+    
+    // Obtener nombre de la tienda
+    const tiendas = await obtenerTiendasDesdeGeoJSON();
+    const tienda = tiendas.find(t => t._id === tiendaId);
+    const tiendaNombre = tienda ? tienda.nombre : `Tienda ${tiendaId}`;
+    
+    // Analizar con Gemini
+    const geminiService = new GeminiService();
+    const analysis = await geminiService.analyzeStoreFeedback(tiendaNombre, recentFeedback);
+    
+    // Guardar nuevo insight
+    const insightDoc = {
+      tienda_id: tiendaId,
+      fecha_analisis: new Date().toISOString(),
+      alertas: analysis.alerts,
+      insights: analysis.insights,
+      recomendaciones: analysis.recommendations,
+      prioridad: analysis.priority,
+      resumen: analysis.summary,
+      feedback_analizado: recentFeedback.map(f => f._id),
+      total_comentarios: recentFeedback.length,
+      analisis_manual: true
+    };
+    
+    await db.collection('insights_gemini').insertOne(insightDoc);
+    
+    res.json({
+      success: true,
+      message: 'Análisis completado',
+      analysis: analysis,
+      feedback_count: recentFeedback.length
+    });
+    
+  } catch (error) {
+    console.error('❌ Error en análisis manual:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
