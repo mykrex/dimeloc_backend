@@ -256,7 +256,6 @@ app.get('/api/geojson', async (req, res) => {
   }
 });
 
-// Agregar feedback
 app.post('/api/tiendas/:id/feedback', async (req, res) => {
   try {
     const { colaborador, comentario, categoria, urgencia } = req.body;
@@ -281,11 +280,11 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
       resuelto: false
     };
     
-    // Guardar feedback en MongoDB
+    // ⚠️ CAMBIO IMPORTANTE: Usar feedback_tienda (SIN S)
     const result = await db.collection('feedback_tienda').insertOne(feedback);
-    console.log(`✅ Feedback guardado con ID: ${result.insertedId}`);
+    console.log(`✅ Feedback guardado en feedback_tienda con ID: ${result.insertedId}`);
     
-    // Obtener feedback reciente de esta tienda para análisis
+    // Obtener feedback reciente para análisis
     const recentFeedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
@@ -374,18 +373,30 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
   }
 });
 
-// Obtener feedback de una tienda
+// ✅ OBTENER FEEDBACK - CORREGIDO
 app.get('/api/tiendas/:id/feedback', async (req, res) => {
   try {
     const tiendaId = parseInt(req.params.id);
+    
+    // ⚠️ CAMBIO IMPORTANTE: Usar feedback_tienda (SIN S)
     const feedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .toArray();
     
-    res.json({ success: true, data: feedback });
+    console.log(`📊 Obtenidos ${feedback.length} comentarios de feedback_tienda para tienda ${tiendaId}`);
+    
+    res.json({
+      success: true,
+      count: feedback.length,
+      data: feedback
+    });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('❌ Error obteniendo feedback:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
