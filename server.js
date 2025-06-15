@@ -282,11 +282,11 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
     };
     
     // Guardar feedback en MongoDB
-    const result = await db.collection('feedback_tiendas').insertOne(feedback);
+    const result = await db.collection('feedback_tienda').insertOne(feedback);
     console.log(`✅ Feedback guardado con ID: ${result.insertedId}`);
     
     // Obtener feedback reciente de esta tienda para análisis
-    const recentFeedback = await db.collection('feedback_tiendas')
+    const recentFeedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .limit(10)
@@ -378,7 +378,7 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
 app.get('/api/tiendas/:id/feedback', async (req, res) => {
   try {
     const tiendaId = parseInt(req.params.id);
-    const feedback = await db.collection('feedback_tiendas')
+    const feedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .toArray();
@@ -413,7 +413,7 @@ app.post('/api/insights/analyze-all', async (req, res) => {
     const results = [];
     
     for (const tienda of tiendas) {
-      const feedback = await db.collection('feedback_tiendas')
+      const feedback = await db.collection('feedback_tienda')
         .find({ tienda_id: tienda._id })
         .sort({ fecha: -1 })
         .limit(10)
@@ -500,11 +500,11 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
     };
     
     // Guardar feedback en MongoDB
-    const result = await db.collection('feedback_tiendas').insertOne(feedback);
+    const result = await db.collection('feedback_tienda').insertOne(feedback);
     console.log(`✅ Feedback guardado con ID: ${result.insertedId}`);
     
     // Obtener feedback reciente de esta tienda para análisis
-    const recentFeedback = await db.collection('feedback_tiendas')
+    const recentFeedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .limit(10)
@@ -583,7 +583,7 @@ app.get('/api/tiendas/:id/feedback', async (req, res) => {
   try {
     const tiendaId = parseInt(req.params.id);
     
-    const feedback = await db.collection('feedback_tiendas')
+    const feedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .toArray();
@@ -679,7 +679,7 @@ app.post('/api/tiendas/:id/analyze', async (req, res) => {
     const tiendaId = parseInt(req.params.id);
     
     // Obtener feedback reciente
-    const recentFeedback = await db.collection('feedback_tiendas')
+    const recentFeedback = await db.collection('feedback_tienda')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .limit(15)
