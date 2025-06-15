@@ -262,45 +262,115 @@ app.post('/api/tiendas/:id/feedback', async (req, res) => {
     const { colaborador, comentario, categoria, urgencia } = req.body;
     const tiendaId = parseInt(req.params.id);
     
+    // Validaciones básicas
+    if (!colaborador || !comentario || !categoria || !urgencia) {
+      return res.status(400).json({
+        success: false,
+        error: 'Faltan campos requeridos: colaborador, comentario, categoria, urgencia'
+      });
+    }
+    
+    // Crear documento de feedback
     const feedback = {
       tienda_id: tiendaId,
-      colaborador,
+      colaborador: colaborador.trim(),
       fecha: new Date().toISOString(),
-      comentario,
+      comentario: comentario.trim(),
       categoria,
       urgencia,
       resuelto: false
     };
     
-    await db.collection('feedback_tiendas').insertOne(feedback);
+    // Guardar feedback en MongoDB
+    const result = await db.collection('feedback_tiendas').insertOne(feedback);
+    console.log(`✅ Feedback guardado con ID: ${result.insertedId}`);
     
-    // Analizar con Gemini si hay suficiente feedback
-    const geminiService = new GeminiService();
+    // Obtener feedback reciente de esta tienda para análisis
     const recentFeedback = await db.collection('feedback_tiendas')
       .find({ tienda_id: tiendaId })
       .sort({ fecha: -1 })
       .limit(10)
       .toArray();
     
-    if (recentFeedback.length >= 3) {
-      const insights = await geminiService.analyzeStoreFeedback(
-        `Tienda ${tiendaId}`, 
-        recentFeedback
-      );
-      
-      if (insights) {
-        await db.collection('insights_gemini').insertOne({
-          tienda_id: tiendaId,
-          fecha_analisis: new Date().toISOString(),
-          ...insights,
-          feedback_analizado: recentFeedback.map(f => f._id)
-        });
+    console.log(`📊 Analizando ${recentFeedback.length} comentarios para tienda ${tiendaId}`);
+    
+    // Analizar con Gemini si hay suficiente feedback
+    let geminiAnalysis = null;
+    let analysisInfo = {
+      generated: false,
+      reason: 'Insuficiente feedback para análisis'
+    };
+    
+    if (recentFeedback.length >= 1) {
+      try {
+        const geminiService = new GeminiService();
+        
+        // Obtener nombre de la tienda
+        const tiendas = await obtenerTiendasDesdeGeoJSON();
+        const tienda = tiendas.find(t => t._id === tiendaId);
+        const tiendaNombre = tienda ? tienda.nombre : `Tienda ${tiendaId}`;
+        
+        geminiAnalysis = await geminiService.analyzeStoreFeedback(
+          tiendaNombre, 
+          recentFeedback
+        );
+        
+        if (geminiAnalysis) {
+          // Guardar insights en MongoDB
+          const insightDoc = {
+            tienda_id: tiendaId,
+            fecha_analisis: new Date().toISOString(),
+            alertas: geminiAnalysis.alerts,
+            insights: geminiAnalysis.insights,
+            recomendaciones: geminiAnalysis.recommendations,
+            prioridad: geminiAnalysis.priority,
+            resumen: geminiAnalysis.summary,
+            feedback_analizado: recentFeedback.map(f => f._id),
+            total_comentarios: recentFeedback.length
+          };
+          
+          const insightResult = await db.collection('insights_gemini').insertOne(insightDoc);
+          console.log(`🤖 Insight generado con ID: ${insightResult.insertedId}`);
+          
+          // Actualizar info de análisis
+          analysisInfo = {
+            generated: true,
+            priority: geminiAnalysis.priority,
+            summary: geminiAnalysis.summary
+          };
+        }
+      } catch (error) {
+        console.error('❌ Error con Gemini:', error.message);
+        analysisInfo = {
+          generated: false,
+          reason: `Error en análisis: ${error.message}`
+        };
       }
     }
     
-    res.json({ success: true, feedback });
+    // ✅ RESPUESTA CORREGIDA para coincidir con Swift
+    res.json({
+      success: true,
+      message: 'Feedback enviado correctamente',
+      feedback: {
+        _id: result.insertedId.toString(),
+        tienda_id: tiendaId,
+        colaborador: feedback.colaborador,
+        fecha: feedback.fecha,
+        comentario: feedback.comentario,
+        categoria: feedback.categoria,
+        urgencia: feedback.urgencia,
+        resuelto: feedback.resuelto
+      },
+      analysis: analysisInfo
+    });
+    
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('❌ Error guardando feedback:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
