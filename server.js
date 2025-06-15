@@ -94,22 +94,24 @@ app.get('/api/tiendas', async (req, res) => {
   }
 });
 
-// Obtener tienda específica por ID
-app.get('/api/tiendas/:id', async (req, res) => {
+// RUTAS ESPECÍFICAS PRIMERO (antes de /:id)
+
+// Tiendas problemáticas
+app.get('/api/tiendas/problematicas', async (req, res) => {
   try {
-    const tiendas = await obtenerTiendasDesdeGeoJSON();
-    const tienda = tiendas.find(t => t._id === parseInt(req.params.id));
-    
-    if (!tienda) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tienda no encontrada'
-      });
-    }
+    const todasLasTiendas = await obtenerTiendasDesdeGeoJSON();
+    const tiendas = todasLasTiendas.filter(tienda => 
+      tienda.nps < 30 || 
+      tienda.out_of_stock > 4 || 
+      tienda.damage_rate > 1 || 
+      tienda.complaint_resolution_time_hrs > 48
+    );
     
     res.json({
       success: true,
-      data: tienda
+      count: tiendas.length,
+      criteria: "NPS < 30 OR desabasto > 4% OR daños > 1% OR quejas > 48hrs",
+      data: tiendas.sort((a, b) => a.nps - b.nps) // Ordenar por NPS ascendente (peores primero)
     });
   } catch (error) {
     res.status(500).json({
@@ -131,31 +133,6 @@ app.get('/api/tiendas/nps/:minimo', async (req, res) => {
       count: tiendas.length,
       filter: `NPS >= ${npsMinimo}`,
       data: tiendas.sort((a, b) => b.nps - a.nps) // Ordenar por NPS descendente
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Tiendas problemáticas
-app.get('/api/tiendas/problematicas', async (req, res) => {
-  try {
-    const todasLasTiendas = await obtenerTiendasDesdeGeoJSON();
-    const tiendas = todasLasTiendas.filter(tienda => 
-      tienda.nps < 30 || 
-      tienda.out_of_stock > 4 || 
-      tienda.damage_rate > 1 || 
-      tienda.complaint_resolution_time_hrs > 48
-    );
-    
-    res.json({
-      success: true,
-      count: tiendas.length,
-      criteria: "NPS < 30 OR desabasto > 4% OR daños > 1% OR quejas > 48hrs",
-      data: tiendas.sort((a, b) => a.nps - b.nps) // Ordenar por NPS ascendente (peores primero)
     });
   } catch (error) {
     res.status(500).json({
@@ -188,6 +165,33 @@ app.get('/api/tiendas/cerca/:lat/:lng/:radio', async (req, res) => {
       center: { lat, lng },
       radio_km: radio,
       data: tiendas
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// RUTA GENÉRICA AL FINAL (después de todas las específicas)
+
+// Obtener tienda específica por ID
+app.get('/api/tiendas/:id', async (req, res) => {
+  try {
+    const tiendas = await obtenerTiendasDesdeGeoJSON();
+    const tienda = tiendas.find(t => t._id === parseInt(req.params.id));
+    
+    if (!tienda) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tienda no encontrada'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: tienda
     });
   } catch (error) {
     res.status(500).json({
