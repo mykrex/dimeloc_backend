@@ -254,6 +254,121 @@ app.get('/api/geojson', async (req, res) => {
   }
 });
 
+// Agregar feedback
+app.post('/api/tiendas/:id/feedback', async (req, res) => {
+  try {
+    const { colaborador, comentario, categoria, urgencia } = req.body;
+    const tiendaId = parseInt(req.params.id);
+    
+    const feedback = {
+      tienda_id: tiendaId,
+      colaborador,
+      fecha: new Date().toISOString(),
+      comentario,
+      categoria,
+      urgencia,
+      resuelto: false
+    };
+    
+    await db.collection('feedback_tiendas').insertOne(feedback);
+    
+    // Analizar con Gemini si hay suficiente feedback
+    const geminiService = new GeminiService();
+    const recentFeedback = await db.collection('feedback_tiendas')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha: -1 })
+      .limit(10)
+      .toArray();
+    
+    if (recentFeedback.length >= 3) {
+      const insights = await geminiService.analyzeStoreFeedback(
+        `Tienda ${tiendaId}`, 
+        recentFeedback
+      );
+      
+      if (insights) {
+        await db.collection('insights_gemini').insertOne({
+          tienda_id: tiendaId,
+          fecha_analisis: new Date().toISOString(),
+          ...insights,
+          feedback_analizado: recentFeedback.map(f => f._id)
+        });
+      }
+    }
+    
+    res.json({ success: true, feedback });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Obtener feedback de una tienda
+app.get('/api/tiendas/:id/feedback', async (req, res) => {
+  try {
+    const tiendaId = parseInt(req.params.id);
+    const feedback = await db.collection('feedback_tiendas')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha: -1 })
+      .toArray();
+    
+    res.json({ success: true, data: feedback });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Obtener insights de Gemini
+app.get('/api/tiendas/:id/insights', async (req, res) => {
+  try {
+    const tiendaId = parseInt(req.params.id);
+    const insights = await db.collection('insights_gemini')
+      .find({ tienda_id: tiendaId })
+      .sort({ fecha_analisis: -1 })
+      .limit(5)
+      .toArray();
+    
+    res.json({ success: true, data: insights });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Analizar todas las tiendas (para reportes)
+app.post('/api/insights/analyze-all', async (req, res) => {
+  try {
+    const geminiService = new GeminiService();
+    const tiendas = await obtenerTiendasDesdeGeoJSON();
+    const results = [];
+    
+    for (const tienda of tiendas) {
+      const feedback = await db.collection('feedback_tiendas')
+        .find({ tienda_id: tienda._id })
+        .sort({ fecha: -1 })
+        .limit(10)
+        .toArray();
+      
+      if (feedback.length > 0) {
+        const insights = await geminiService.analyzeStoreFeedback(
+          tienda.nombre, 
+          feedback
+        );
+        
+        if (insights && insights.priority === 'alta') {
+          results.push({
+            tienda: tienda.nombre,
+            tienda_id: tienda._id,
+            ...insights
+          });
+        }
+      }
+    }
+    
+    res.json({ success: true, urgent_stores: results });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
