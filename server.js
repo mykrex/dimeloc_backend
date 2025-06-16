@@ -1608,6 +1608,13 @@ app.post('/api/gemini/prediccion/:tiendaId', async (req, res) => {
       parseInt(f.properties.col0) === tiendaId
     );
     
+    if (!tienda) {
+      return res.status(404).json({
+        success: false,
+        error: 'Tienda no encontrada'
+      });
+    }
+    
     // Análisis predictivo con Gemini
     const contextoPrediccion = {
       tienda: tienda.properties,
@@ -1623,15 +1630,39 @@ app.post('/api/gemini/prediccion/:tiendaId', async (req, res) => {
     const geminiService = new GeminiService();
     const predicciones = await geminiService.generarPredicciones(contextoPrediccion);
     
+    // GUARDAR LAS PREDICCIONES EN LA BASE DE DATOS
+    const documentoPredicciones = {
+      tienda_id: tiendaId,
+      tipo_analisis: "prediccion", // IMPORTANTE: usar "prediccion"
+      fecha_analisis: new Date().toISOString(),
+      predicciones: predicciones, // Guardar las predicciones completas
+      contexto_analizado: {
+        feedback_count: feedback6Meses.length,
+        evaluaciones_count: evaluaciones6Meses.length,
+        periodo_analisis: "6_meses"
+      },
+      utilizado: false,
+      vigente_hasta: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() // Válido por 90 días
+    };
+    
+    // Guardar en la colección analisis_gemini
+    const result = await db.collection('analisis_gemini').insertOne(documentoPredicciones);
+    console.log(`🔮 Predicciones guardadas con ID: ${result.insertedId}`);
+    
+    // RESPUESTA CONSISTENTE CON TU APP
     res.json({
       success: true,
       tienda_id: tiendaId,
+      prediccion_id: result.insertedId, // ID del documento guardado
       predicciones: predicciones
     });
     
   } catch (error) {
     console.error('❌ Error en predicciones:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
 
